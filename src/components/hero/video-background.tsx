@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 interface VideoBackgroundProps {
   src: string;
-  mobileSrc?: string; // Optional mobile-specific video source
+  mobileSrc?: string;
   className?: string;
 }
 
@@ -14,65 +14,129 @@ export function VideoBackground({
   className = "" 
 }: VideoBackgroundProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [isMobile, setIsMobile] = useState(false);
+  const [isMobile, setIsMobile] = useState<boolean | null>(null); // null during hydration
+  const [mounted, setMounted] = useState(false);
 
+  // Handle Next.js hydration
   useEffect(() => {
-    // Check if device is mobile based on screen width
+    setMounted(true);
+    
     const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768); // Tailwind's md breakpoint
+      setIsMobile(window.innerWidth < 768);
     };
 
-    // Initial check
     checkMobile();
-
-    // Listen for window resize
     window.addEventListener('resize', checkMobile);
 
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
+  // Handle video autoplay after mount
   useEffect(() => {
+    if (!mounted || isMobile === null) return;
+
     const video = videoRef.current;
     if (video) {
-      video.play().catch((error) => {
-        console.log("Video autoplay failed:", error);
-      });
-    }
-  }, [isMobile]); // Re-trigger when mobile state changes
+      const playVideo = async () => {
+        try {
+          video.currentTime = 0;
+          
+          // Mobile-specific handling
+          if (isMobile) {
+            // Force load on mobile
+            video.load();
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
+          
+          await video.play();
+        } catch (error) {
+          console.log("Video autoplay failed:", error);
+          
+          // Hide video controls on mobile if autoplay fails
+          if (isMobile && video) {
+            video.style.opacity = '0';
+            console.log("Mobile autoplay blocked - using fallback background");
+          }
+        }
+      };
 
-  // Choose video source based on device type
+      // Delay to ensure DOM is ready
+      const timer = setTimeout(playVideo, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [mounted, isMobile]);
+
+  // Prevent hydration mismatch - don't render video until mounted
+  if (!mounted) {
+    return (
+      <div className={`absolute inset-0 overflow-hidden ${className}`}>
+        <div 
+          className="absolute inset-0 bg-gray-300" 
+          style={{
+            background: 'linear-gradient(0deg, rgba(0, 0, 0, 0.60) 0%, rgba(0, 0, 0, 0.60) 100%)'
+          }} 
+        />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent md:from-black/10" />
+      </div>
+    );
+  }
+
   const videoSource = isMobile && mobileSrc ? mobileSrc : src;
 
   return (
     <div className={`absolute inset-0 overflow-hidden ${className}`}>
-      {/* Fallback background gradient when video is not available */}
+      {/* Fallback background */}
       <div 
         className="absolute inset-0 bg-gray-300" 
         style={{
           background: 'linear-gradient(0deg, rgba(0, 0, 0, 0.60) 0%, rgba(0, 0, 0, 0.60) 100%)'
-                }} 
+        }} 
       />
       
       <video
         ref={videoRef}
-        className={`h-full w-full object-cover ${
-          isMobile ? 'object-center' : 'object-center'
-        }`}
+        className={`h-full w-full object-cover transition-opacity duration-300`}
         autoPlay
         loop
         muted
         playsInline
-        preload={isMobile ? "none" : "metadata"} // Lighter preload for mobile
-        onError={() => {
-          console.log("Video failed to load, using fallback background");
+        controls={false}
+        disablePictureInPicture
+        webkit-playsinline="true"
+        preload="metadata"
+        poster="" // Prevent poster image flash
+        onError={(e) => {
+          console.log("Video failed to load:", e);
+          if (videoRef.current) {
+            videoRef.current.style.opacity = '0';
+          }
         }}
-        key={videoSource} // Force re-render when source changes
+        onLoadedData={() => {
+          const video = videoRef.current;
+          if (video && isMobile) {
+            video.play().catch(() => {
+              console.log("Mobile autoplay requires user interaction");
+              video.style.opacity = '0';
+            });
+          }
+        }}
+        onCanPlayThrough={() => {
+          const video = videoRef.current;
+          if (video) {
+            video.style.opacity = '1';
+            if (isMobile) {
+              video.play().catch(console.log);
+            }
+          }
+        }}
+        style={{
+          pointerEvents: 'none',
+          opacity: 0 // Start hidden, show when ready
+        }}
       >
         <source src={videoSource} type="video/mp4" />
-        Your browser does not support the video tag.
       </video>
       
-      {/* Responsive gradient overlay */}
       <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent md:from-black/10" />
     </div>
   );
